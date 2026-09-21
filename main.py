@@ -79,6 +79,7 @@ class AnalizzatoreSiccitaPorcini:
     def __init__(self, soglia_evento: float = 35.0):
         self.soglia_evento = soglia_evento
 
+
     def analizza(self, serie: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not serie:
             return {"evento_rilevato": False, "stato": "In attesa di dati ARPA"}
@@ -89,8 +90,21 @@ class AnalizzatoreSiccitaPorcini:
         eventi_trovati = []
         i = 2
         while i < n:
+            mese_attuale = int(serie[i]["data"].split("-")[1])
+            t_media_recente = sum(serie[k]["t_media"] for k in range(max(0, i-5), i)) / min(i, 5) if i > 0 else 15.0
+            
+            soglia_dinamica = self.soglia_evento # Base 35.0
+            is_autunno = False
+            
+            # Autunno: fotoperiodo corto e T media in calo
+            if mese_attuale >= 9 and t_media_recente <= 15.5:
+                soglia_dinamica = 20.0  
+                is_autunno = True
+
             c3 = sum(serie[k]["pioggia_mm"] for k in range(i - 2, i + 1))
-            if c3 >= self.soglia_evento:
+            
+            # --- 1. Controllo Pioggia Reale ---
+            if c3 >= soglia_dinamica:
                 giorni_finestra = [serie[k] for k in range(i - 2, i + 1)]
                 giorno_max = max(giorni_finestra, key=lambda x: x["pioggia_mm"])
                 idx = serie.index(giorno_max)
@@ -103,6 +117,8 @@ class AnalizzatoreSiccitaPorcini:
                     elif 30.0 <= p_pre_30 < 60.0: ritardo, soglia, smorz = 3, 40.0, 0.90
                     else: ritardo, soglia, smorz = 0, 35.0, 1.00
 
+                    if is_autunno: smorz = min(1.0, smorz + 0.20)
+
                     giorni_da_ev = (n - 1) - idx
                     
                     giorni_favonio = sum(1 for k in range(idx + 1, n) 
@@ -111,56 +127,87 @@ class AnalizzatoreSiccitaPorcini:
                                          and serie[k]["pioggia_mm"] < 1.0)
                     danno_favonio = max(0.1, 1.0 - (giorni_favonio * 0.25))
                     
-                    # --- NUOVO: Calcolo Delta-T (Shock termico per i faggi) ---
                     pre_days = serie[max(0, idx - 4):idx]
                     t_max_pre = max([d["t_max"] for d in pre_days]) if pre_days else giorno_max["t_max"]
-                    
                     post_days = serie[idx:min(n, idx + 4)]
                     t_min_post = min([d["t_min"] for d in post_days]) if post_days else giorno_max["t_min"]
                     
                     delta_t_shock = t_max_pre - t_min_post
-                    # -----------------------------------------------------------
 
                     eventi_trovati.append({
-                        "indice": idx,
-                        "data": giorno_max["data"],
-                        "pioggia": c3,
-                        "giorni_da_evento": giorni_da_ev,
-                        "ritardo": ritardo,
-                        "soglia": soglia,
-                        "smorzamento": smorz * danno_favonio,
-                        "delta_t_shock": delta_t_shock
+                        "indice": idx, "data": giorno_max["data"], "pioggia": c3,
+                        "giorni_da_evento": giorni_da_ev, "ritardo": ritardo,
+                        "soglia": soglia_dinamica, "smorzamento": smorz * danno_favonio,
+                        "delta_t_shock": delta_t_shock, "is_occulto": False
                     })
                 i += 3 
-            else:
-                i += 1
+                continue
+
+            # --- 2. Controllo Innesco a Secco (Anticiclone / Rugiada) ---
+            if is_autunno and i >= 3:
+                giorni_anticiclone = 0
+                for k in range(i - 3, i + 1):
+                    escursione = serie[k]["t_max"] - serie[k]["t_min"]
+                    # Escursione forte (>11°C), alta umidità (>65%) e assenza pioggia (<1mm)
+                    if escursione >= 11.0 and serie[k]["rh_media"] >= 65.0 and serie[k]["pioggia_mm"] < 1.0:
+                        giorni_anticiclone += 1
+                
+                # Se per 4 giorni di fila abbiamo irraggiamento e rugiada, forziamo l'innesco
+                if giorni_anticiclone == 4:
+                    if not eventi_trovati or (i - eventi_trovati[-1]["indice"]) >= 8:
+                        eventi_trovati.append({
+                            "indice": i, "data": serie[i]["data"], "pioggia": 25.0, # Finto accumulo idrico (rugiada)
+                            "giorni_da_evento": (n - 1) - i, 
+                            "ritardo": 5, # Più faticoso incubare a secco
+                            "soglia": 20.0, 
+                            "smorzamento": 0.8, # Buttata decente ma non massima
+                            "delta_t_shock": 6.0, # L'escursione forte funge da shock termico
+                            "is_occulto": True
+                        })
+                        i += 4
+                        continue
+            i += 1
 
         eventi_trovati = [ev for ev in eventi_trovati if ev["giorni_da_evento"] <= 40]
-
         notti_tropicali = sum(1 for d in serie if d.get("t_min", 0) >= 19.0)
-        rischio_senescenza = notti_tropicali >= 2
+        
+        rh_ultimi_4 = [d.get("rh_media", 50.0) for d in serie[-4:]] if len(serie) >= 4 else [giorno_ieri["rh_media"]]
+        rh_inerzia = sum(rh_ultimi_4) / len(rh_ultimi_4)
+
+        t_media_att = giorno_ieri["t_media"]
+        quota_senescenza_raw = 1285 + ((t_media_att - 11.5) / 0.65) * 100
+        quota_senescenza_calcolata = max(700, min(1800, int(round(quota_senescenza_raw / 50.0) * 50)))
+        
+        mese_oggi = int(giorno_ieri["data"].split("-")[1])
+        is_fase_autunnale = mese_oggi >= 9 and t_media_att <= 15.5
 
         diag = {
             "t_max_attuale": giorno_ieri["t_max"],
             "t_min_attuale": giorno_ieri["t_min"],
             "rh_media_attuale": giorno_ieri["rh_media"],
+            "rh_media_inerzia": round(rh_inerzia, 1), 
             "vento_max_attuale": giorno_ieri["vento_max"],
             "pioggia_oggi": giorno_ieri["pioggia_mm"], 
             "eventi": eventi_trovati,
-            "rischio_senescenza": rischio_senescenza
+            "rischio_senescenza": notti_tropicali >= 2,
+            "is_autunno": is_fase_autunnale,
+            "quota_senescenza": quota_senescenza_calcolata
         }
         
         if not eventi_trovati:
-            diag.update({"evento_rilevato": False, "stato": "Nessuna pioggia rilevante"})
+            diag.update({"evento_rilevato": False, "stato": "Nessuna pioggia rilevante", "is_occulto": False})
         else:
             ev_recente = eventi_trovati[-1]
             diag.update({
                 "evento_rilevato": True,
                 "data_evento": ev_recente["data"],
                 "giorni_da_evento": ev_recente["giorni_da_evento"],
-                "ritardo_siccita_applicato": ev_recente["ritardo"]
+                "ritardo_siccita_applicato": ev_recente["ritardo"],
+                "is_occulto": ev_recente.get("is_occulto", False) # Esporta la variabile per la UI
             })
         return diag
+
+
 
 def calcola_microzone(diag: Dict[str, Any], quota_stazione: int = 1285) -> List[Dict[str, Any]]:
     zone_cfg = [
@@ -179,18 +226,24 @@ def calcola_microzone(diag: Dict[str, Any], quota_stazione: int = 1285) -> List[
         gradiente = 0.0065 * (z["quota"] - quota_stazione)
         t_min_b = diag["t_min_attuale"] - gradiente
         t_max_b = diag["t_max_attuale"] - gradiente
-        
-        rh_eff = diag["rh_media_attuale"]
-        if z["esposizione"] == "SE":
-            t_max_eff, t_min_eff, rh_eff = t_max_b + 2.5, t_min_b, max(0.0, diag["rh_media_attuale"] - 10.0)
-        elif z["esposizione"] == "NE":
-            t_max_eff, t_min_eff, rh_eff = t_max_b - 1.0, t_min_b, min(100.0, diag["rh_media_attuale"] + 12.0)
-        elif z["esposizione"] == "OVEST_OMBRA":
-            t_max_eff, t_min_eff, rh_eff = t_max_b - 1.5, t_min_b - 0.5, min(100.0, diag["rh_media_attuale"] + 15.0)
-        elif z["esposizione"] == "NORD":
-            t_max_eff, t_min_eff, rh_eff = t_max_b - 2.5, t_min_b - 1.5, min(100.0, diag["rh_media_attuale"] + 20.0)
+           
+        # --- NUOVO: Assegnazione Dinamica dell'Umidità Base ---
+        if z["essenza"] == "betulla":
+            rh_base = diag["rh_media_attuale"]
         else:
-            t_max_eff, t_min_eff = t_max_b, t_min_b
+            rh_base = diag.get("rh_media_inerzia", diag["rh_media_attuale"])
+        
+        # Esposizioni (usiamo rh_base invece di rh_media_attuale)
+        if z["esposizione"] == "SE":
+            t_max_eff, t_min_eff, rh_eff = t_max_b + 2.5, t_min_b, max(0.0, rh_base - 10.0)
+        elif z["esposizione"] == "NE":
+            t_max_eff, t_min_eff, rh_eff = t_max_b - 1.0, t_min_b, min(100.0, rh_base + 12.0)
+        elif z["esposizione"] == "OVEST_OMBRA":
+            t_max_eff, t_min_eff, rh_eff = t_max_b - 1.5, t_min_b - 0.5, min(100.0, rh_base + 15.0)
+        elif z["esposizione"] == "NORD":
+            t_max_eff, t_min_eff, rh_eff = t_max_b - 2.5, t_min_b - 1.5, min(100.0, rh_base + 20.0)
+        else:
+            t_max_eff, t_min_eff, rh_eff = t_max_b, t_min_b, rh_base
             
         if z["nome"] == "Camnasco": rh_eff = max(60.0, rh_eff) 
         if z["nome"] == "Faggi Ovest": t_min_eff += 1.0 
@@ -201,22 +254,19 @@ def calcola_microzone(diag: Dict[str, Any], quota_stazione: int = 1285) -> List[
         
         # --- NUOVO: Tolleranza al freddo differenziata ---
         if z["essenza"] == "pino":
-            # Il pino regge fino a 0°C senza bloccarsi totalmente
             f_T_freddo = 0.0 if t_min_eff < 0.0 else ((t_min_eff - 0.0) / 3.0 if t_min_eff < 3.0 else 1.0)
         else:
             f_T_freddo = 0.0 if t_min_eff < 3.0 else ((t_min_eff - 3.0) / 4.0 if t_min_eff < 7.0 else 1.0)
         
-        # --- NUOVO: Grilletto Termico per Specie ---
+        # --- NUOVO: Grilletto Termico con blocco caldo per Pinophilus ---
         f_grilletto = 1.0
         if z["essenza"] == "betulla":
             if 8.0 <= t_min_eff <= 13.0: f_grilletto = 1.3
             elif t_min_eff > 17.0: f_grilletto = 0.7
         elif z["essenza"] == "pino":
-            # Finestra termica molto più bassa per il Pinophilus
             if 4.0 <= t_min_eff <= 10.0: f_grilletto = 1.4
-            elif t_min_eff > 15.0: f_grilletto = 0.7
+            elif t_min_eff > 12.0: f_grilletto = 0.1  # Blocco severo: fa troppo caldo per i rossi
         elif z["essenza"] == "faggio":
-            # Il faggio ha un range intermedio
             if 10.0 <= t_min_eff <= 14.0: f_grilletto = 1.2
             elif t_min_eff > 18.0: f_grilletto = 0.8
         elif z["essenza"] == "castagno":
@@ -279,7 +329,8 @@ def calcola_microzone(diag: Dict[str, Any], quota_stazione: int = 1285) -> List[
             "stato": stato,
             "onde": onde
         })
-    return res
+    return res    
+
 
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Connessione ARPA...")
@@ -310,11 +361,31 @@ def main():
     diagnosi = analizzatore.analizza(storico_finale)
     previsioni = calcola_microzone(diagnosi)
 
+    # --- NUOVO: Recupero e Salvataggio Snapshot Storico ---
+    proiezioni_salvate = {}
+    try:
+        if os.path.exists("data/previsioni.json"):
+            with open("data/previsioni.json", "r", encoding="utf-8") as f:
+                old_data = json.load(f)
+                proiezioni_salvate = old_data.get("proiezioni_salvate", {})
+    except Exception:
+        pass
+
+    # Salviamo la foto esatta dell'indice di buttata di oggi
+    oggi_str = datetime.now().strftime("%Y-%m-%d")
+    proiezioni_salvate[oggi_str] = {z["zona"]: round(z["indice_buttata"], 1) for z in previsioni}
+
+    # Teniamo in memoria solo gli ultimi 15 giorni per non appesantire il file
+    keys = sorted(proiezioni_salvate.keys())[-15:]
+    proiezioni_salvate = {k: proiezioni_salvate[k] for k in keys}
+    # -------------------------------------------------------
+
     output = {
         "ultimo_aggiornamento": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "stazione": {"id": ID_STAZIONE, "nome": "San Siro", "quota_m": 1285},
         "diagnosi_meteo": diagnosi,
         "zone": previsioni,
+        "proiezioni_salvate": proiezioni_salvate, # Aggiunto al JSON
         "storico_completo": storico_finale
     }
 
@@ -327,4 +398,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
     

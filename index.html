@@ -64,7 +64,7 @@
 <body>
 
     <header>
-        <h1>🍄 DIEGO Porcini Beta2</h1>
+        <h1>🍄 DIEGO Porcini Beta3</h1>
         <div class="update-time" id="last-update">Aggiornamento...</div>
     </header>
 
@@ -166,7 +166,7 @@
     <script>
 // --- SOSTITUISCI CON IL TUO USERNAME ---
         const GITHUB_USERNAME = "geodiegogit"; 
-        const REPO_NAME = "fungo-forecast-beta2"; 
+        const REPO_NAME = "fungo-forecast-beta4"; 
         const DATA_URL = `https://raw.githubusercontent.com/${GITHUB_USERNAME}/${REPO_NAME}/main/data/previsioni.json`;
 
         let globalData = null;
@@ -326,12 +326,19 @@ function getFaseColor(p, isDiscesa) {
             
             const diag = data.diagnosi_meteo;
             let ggDaEvento = diag.giorni_da_evento !== undefined ? (diag.giorni_da_evento + 1) : null;
-            
+
+            // Mostra se l'evento idrico è da pioggia reale o da rugiada (anticiclone)
+            let tipoEvento = 'In attesa';
+            if (diag.evento_rilevato) {
+                tipoEvento = diag.is_occulto ? '💧 Innesco da Rugiada (Anticiclone)' : '🌧️ Ciclo idrico da Pioggia';
+            }
+
             document.getElementById('siccita-text').innerHTML = `
-                <strong>Stato Generale:</strong> ${diag.evento_rilevato ? 'Ciclo idrico in corso' : 'In attesa'}<br>
-                <strong>Ultimo evento piovoso:</strong> ${ggDaEvento !== null ? ggDaEvento + ' gg fa' : 'N/D'}<br>
-                <strong>Ritardo Siccità:</strong> ${diag.ritardo_siccita_applicato > 0 ? '+' + diag.ritardo_siccita_applicato + ' gg' : 'Nessuno'}<br>
-            `;
+                <strong>Stato Generale:</strong> ${tipoEvento}<br>
+                <strong>Ultimo innesco calcolato:</strong> ${ggDaEvento !== null ? ggDaEvento + ' gg fa' : 'N/D'}<br>
+                <strong>Ritardo Terreno:</strong> ${diag.ritardo_siccita_applicato > 0 ? '+' + diag.ritardo_siccita_applicato + ' gg' : 'Nessuno'}<br>
+            `;            
+
 
             if (diag.rischio_senescenza) {
                 document.getElementById('card-senescenza').classList.remove('hidden');
@@ -432,11 +439,11 @@ function getFaseColor(p, isDiscesa) {
 
         // 2. LOGICA DEL CONSIGLIO E DEL MIRINO
         if (ggDaEvento === null) {
-            consiglio = "Il bosco è secco e in attesa. 🍂 L'unica speranza è cercare le zone con sorgenti sotterranee (Camnasco) o aspettare la pioggia." + alertOndeMultiple;
+            consiglio = "Il bosco è secco e in attesa. 🍂 L'unica speranza è cercare le zone con sorgenti sotterranee (Acqua benedetta) o aspettare la pioggia." + alertOndeMultiple;
         } else if (tmin < 6 && !isOndaDiscendente) {
             consiglio = "Fa frècc di notte! 🥶 L'abbassamento termico blocca le betulle. Stai sotto i 1000m o ripiega sugli Abeti Nord (se sono attivi) che resistono al freddo." + alertOndeMultiple;
         } else if (vento > 25 && rh < 55) {
-            consiglio = "Attento al vento secco! 💨 Il favonio ha asciugato i versanti aperti. Cerca rifugio nell'anfiteatro dei Faggi a Ovest (Sant'Amate), lì c'è il microclima umido perfetto." + alertOndeMultiple;
+            consiglio = "Attento al vento secco! 💨 Il favonio ha asciugato i versanti aperti. Cerca rifugio nell'anfiteatro dei Faggi, lì c'è il microclima umido perfetto." + alertOndeMultiple;
         } else {
             let giornoInizioMontagna = 8 + ritardoStress;
             let giornoFineMontagna = 17 + ritardoStress; 
@@ -444,7 +451,7 @@ function getFaseColor(p, isDiscesa) {
             if (ggDaEvento < (6 + ritardoStress) && ggDaEvento >= 0) {
                  consiglio = introSenescenza + (zoneAttive.length > 0 ? "🌱 L'ultima pioggia è in incubazione, <b>ma le vecchie onde sono attive!</b>" : "🌱 Le micorrize sono in piena incubazione per l'ultimo evento. Manca qualche giorno al fronte.") + alertOndeMultiple;
             } else if (ggDaEvento >= (6 + ritardoStress) && ggDaEvento < giornoInizioMontagna) {
-                consiglio = introSenescenza + "L'onda della pioggia è partita! Le prime spie sono a <b>Camnasco (750m)</b>, la sorgente anticipa tutto." + alertOndeMultiple;
+                consiglio = introSenescenza + "L'onda della pioggia è partita! Le prime spie sono a <b>Acqua benedetta </b>, la sorgente anticipa tutto." + alertOndeMultiple;
             } else if (ggDaEvento > giornoFineMontagna) {
                 consiglio = introSenescenza + "Siamo a fine ciclo per l'ultimo evento. 🏔️" + alertOndeMultiple;
             } else {
@@ -484,7 +491,22 @@ function getFaseColor(p, isDiscesa) {
                 consiglio += alertOndeMultiple;
             }
         }
-        //fino qui 
+        //fine logica consiglio mirino
+        
+        // --- NUOVO: Aggiunta Spingardata Autunnale al Consiglio ---
+        if (diag.is_autunno) {
+            consiglio += `<div style="margin-top: 15px; padding: 12px; background: #fff3e0; border-radius: 8px; border-left: 4px solid #f57c00;">
+                🍂 <b>Spingardata Autunnale Attiva!</b><br>
+                <span style="font-size: 0.85rem; color: #555;">Il fotoperiodo è corto e la temperatura è in calo. Gli alberi stanno riducendo la linfa zuccherina e il micelio reagisce con una fioritura d'emergenza, accontentandosi anche di poca pioggia (soglia ridotta a 20mm).</span><br>
+                <br>📍 <b>Il Mirino Altitudinale:</b> Seguendo l'inversione termica e il viraggio delle foglie, oggi la linea esatta di senescenza si trova attorno a <b>${diag.quota_senescenza} metri</b>. Punta questa fascia per le migliori buttate d'emergenza!
+            </div>`;
+        }
+        // fine spingarda autunnale
+        
+        
+        
+        
+        //fino qui al seguito assembla consiglio 
             document.getElementById('consiglio-text').innerHTML = consiglio;
 
             const zc = document.getElementById('zone-container');
@@ -559,7 +581,8 @@ function getFaseColor(p, isDiscesa) {
                         <div class="cal-date${isDomenica}">${formatDDMM(d.data)}</div>
                         <div class="cal-luna">${getFaseLunare(d.data)}</div>
                         <div class="cal-icon">${icon}</div>
-                        <div class="cal-data">${d.pioggia_mm}mm | ${Math.round(d.t_min)}°/${Math.round(d.t_max)}°</div>
+                        <div class="cal-data" style="font-size: 0.75rem;">${d.pioggia_mm}mm | ${Math.round(d.t_min)}°/${Math.round(d.t_max)}° | 💧${Math.round(d.rh_media)}%</div>
+
                         <div class="cal-diario">${diario[d.data] ? '🍄' : ''}</div>
                     </div>`;
             });
@@ -581,64 +604,75 @@ function getFaseColor(p, isDiscesa) {
             
             const oggi = new Date();
 
-            //BLOCCO CHE CALCOLA DATE FUTURE
-            for(let offset = 0; offset <= 14; offset++) {
+            // BLOCCO CHE CALCOLA DATE FUTURE E RECUPERA QUELLE PASSATE
+            for(let offset = -4; offset <= 14; offset++) {
                 let futureDate = new Date();
                 futureDate.setDate(oggi.getDate() + offset);
+                
+                // Formattiamo la data in YYYY-MM-DD per cercare lo snapshot
+                let padDate = `${futureDate.getFullYear()}-${String(futureDate.getMonth()+1).padStart(2,'0')}-${String(futureDate.getDate()).padStart(2,'0')}`;
                 
                 let distDalDatoCerto = offset + 1; 
                 let dots = '';
 
-                // (Prima del ciclo 'data.zone.forEach', inizializziamo un oggetto per ricordare il giorno prima)
                 if (!window.memoriaOnde) window.memoriaOnde = {};
-                
                 
                 data.zone.forEach((z) => {
                     let finalProj = 0;
-                    if (z.onde && z.onde.length > 0) {
-                        z.onde.forEach(onda => {
-                            let ritardoAggiuntivo = (isSenescenzaAttiva && z.zona !== "Camnasco") ? 4 : 0;
-                            let dToP = (distDalDatoCerto - (onda.giorni_mancanti_da_ieri + ritardoAggiuntivo));
-                            
-                            let picco = onda.indice_picco || 0;
-                            if (isSenescenzaAttiva && z.zona !== "Camnasco") picco *= 0.6; 
+                    
+                    // Se è un giorno passato e Python ha salvato uno snapshot per questa data
+                    if (offset < 0 && data.proiezioni_salvate && data.proiezioni_salvate[padDate] && data.proiezioni_salvate[padDate][z.zona] !== undefined) {
+                        finalProj = data.proiezioni_salvate[padDate][z.zona];
+                    } 
+                    // Altrimenti (per oggi e il futuro) usa il calcolo matematico
+                    else {
+                        if (z.onde && z.onde.length > 0) {
+                            z.onde.forEach(onda => {
+                                let ritardoAggiuntivo = (isSenescenzaAttiva && z.zona !== "Camnasco") ? 4 : 0;
+                                let dToP = (distDalDatoCerto - (onda.giorni_mancanti_da_ieri + ritardoAggiuntivo));
+                                
+                                let picco = onda.indice_picco || 0;
+                                if (isSenescenzaAttiva && z.zona !== "Camnasco") picco *= 0.6; 
 
-                            if (picco > 0) {
-                                finalProj += picco * Math.exp(- (dToP*dToP)/(2 * 4.84));
-                            }
-                        });
+                                if (picco > 0) {
+                                    finalProj += picco * Math.exp(- (dToP*dToP)/(2 * 4.84));
+                                }
+                            });
+                        }
                     }
                     
-                    // ARROTONDAMENTO AL 5%
                     let pRounded = Math.round(finalProj / 5) * 5;
                     if(pRounded > 100) pRounded = 100;
                     if(pRounded < 0) pRounded = 0;
 
-                    // CALCOLO DISCESA (Se l'indice di oggi è minore di quello di ieri)
                     let isDiscesa = false;
                     if (window.memoriaOnde[z.zona] !== undefined && pRounded < window.memoriaOnde[z.zona] && pRounded > 0) {
                         isDiscesa = true;
                     }
-                    window.memoriaOnde[z.zona] = pRounded; // Salviamo per il ciclo di domani
+                    window.memoriaOnde[z.zona] = pRounded;
 
                     let c = getFaseColor(pRounded, isDiscesa);
                     let label = pRounded === 0 ? '-' : pRounded + '%';
-                    dots += `<div class="future-dot" style="background-color: ${c.bg}; color: ${c.txt}; border-color: ${c.border};">${label}</div>`;
+                    
+                    let opacityStyle = offset < 0 ? "opacity: 0.7;" : "";
+                    
+                    dots += `<div class="future-dot" style="background-color: ${c.bg}; color: ${c.txt}; border-color: ${c.border}; ${opacityStyle}">${label}</div>`;
                 });                
-                
 
-
-            // Controllo se la data futura è domenica
                 let isDomenica = futureDate.getDay() === 0 ? " domenica" : "";
+                let rowStyle = offset === 0 ? "background-color: #fffde7; border-left: 4px solid #fbc02d; padding-left: 4px;" : "";
+                let dataLabel = offset === 0 ? "<b>Oggi</b>" : `${String(futureDate.getDate()).padStart(2, '0')}/${String(futureDate.getMonth() + 1).padStart(2, '0')}`;
 
                 futureHtml += `
-                    <div class="cal-row">
-                        <div class="cal-date${isDomenica}">${String(futureDate.getDate()).padStart(2, '0')}/${String(futureDate.getMonth() + 1).padStart(2, '0')}</div>
+                    <div class="cal-row" style="${rowStyle}">
+                        <div class="cal-date${isDomenica}" style="font-size: 0.8rem;">${dataLabel}</div>
                         <div class="cal-luna">${getFaseLunare(futureDate.toISOString().split('T')[0])}</div>
                         <div class="future-zones">${dots}</div>
                     </div>`;
-
             }
+
+
+            
             document.getElementById('future-calendar').innerHTML = futureHtml;
         }
 
@@ -757,7 +791,8 @@ function getFaseColor(p, isDiscesa) {
                         </div>`;
                     count++;
                 }
-                document.getElementById('forecast-container').html = html; // fix syntax error below
+
+                //document.getElementById('forecast-container').html = html; // fix syntax error below
                 document.getElementById('forecast-container').innerHTML = html;
             } catch (e) {
                 document.getElementById('forecast-container').innerHTML = "Errore nel caricamento previsioni: " + e.message;
